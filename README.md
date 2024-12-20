@@ -13,6 +13,125 @@
 - 支持 Kubernetes 探针
 - 低资源占用
 
+## 可用指标
+
+### 基础指标
+- `redis_up{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：Redis 实例的可用性 (1 表示可用，0 表示不可用)
+  - 标签：addr（Redis 实例地址）
+
+### 连接指标（collect_clients=true）
+- `redis_connected_clients{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：当前连接的客户端数量
+  - 标签：addr（Redis 实例地址）
+
+### 内存指标（collect_memory=true）
+- `redis_memory_used_bytes{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：Redis 已使用的内存字节数
+  - 标签：addr（Redis 实例地址）
+
+- `redis_memory_max_bytes{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：Redis 最大可用内存字节数
+  - 标签：addr（Redis 实例地址）
+
+- `redis_memory_fragmentation_ratio{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：内存碎片率（实际使用内存/Redis 分配内存）
+  - 标签：addr（Redis 实例地址）
+
+### 键值指标（collect_keys=true）
+- `redis_keys_total{addr="<redis_addr>",db="db0"}`
+  - 类型：Gauge
+  - 说明：每个数据库的键总数
+  - 标签：addr（Redis 实例地址），db（数据库编号）
+
+- `redis_expired_keys_total{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：过期的键总数
+  - 标签：addr（Redis 实例地址）
+
+- `redis_evicted_keys_total{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：由于内存限制被驱逐的键总数
+  - 标签：addr（Redis 实例地址）
+
+### 性能指标（collect_commands=true）
+- `redis_commands_processed_total{addr="<redis_addr>"}`
+  - 类型：Counter
+  - 说明：处理的命令总数
+  - 标签：addr（Redis 实例地址）
+  - 使用建议：使用 rate() 函数计算命令处理速率
+
+- `redis_keyspace_hits_total{addr="<redis_addr>"}`
+  - 类型：Counter
+  - 说明：键查找命中次数
+  - 标签：addr（Redis 实例地址）
+  - 使用建议：结合 misses 计算命中率
+
+- `redis_keyspace_misses_total{addr="<redis_addr>"}`
+  - 类型：Counter
+  - 说明：键查找未命中次数
+  - 标签：addr（Redis 实例地址）
+  - 使用建议：结合 hits 计算命中率
+
+### 持久化指标
+- `redis_last_save_time_seconds{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：最后一次 RDB 保存的时间戳（Unix 时间戳）
+  - 标签：addr（Redis 实例地址）
+
+- `redis_last_save_changes_total{addr="<redis_addr>"}`
+  - 类型：Gauge
+  - 说明：自上次 RDB 保存以来的更改数
+  - 标签：addr（Redis 实例地址）
+
+## PromQL 使用示例
+
+1. 计算命令处理速率（每秒）：
+```promql
+rate(redis_commands_processed_total{addr="redis:6379"}[5m])
+```
+
+2. 计算键命中率：
+```promql
+sum(rate(redis_keyspace_hits_total[5m])) / (sum(rate(redis_keyspace_hits_total[5m])) + sum(rate(redis_keyspace_misses_total[5m]))) * 100
+```
+
+3. 计算内存使用率：
+```promql
+redis_memory_used_bytes{addr="redis:6379"} / redis_memory_max_bytes{addr="redis:6379"} * 100
+```
+
+4. 监控连接数变化：
+```promql
+delta(redis_connected_clients{addr="redis:6379"}[5m])
+```
+
+5. 计算每个数据库的键数量变化率：
+```promql
+rate(redis_keys_total{addr="redis:6379"}[5m])
+```
+
+## Grafana 面板变量设置
+
+1. Redis 实例选择器：
+```
+Name: redis_instance
+Label: Redis Instance
+Query: label_values(redis_up, addr)
+```
+
+2. 数据库选择器：
+```
+Name: redis_db
+Label: Database
+Query: label_values(redis_keys_total{addr="$redis_instance"}, db)
+```
+
 ## 快速开始
 
 ### 命令行参数
@@ -104,7 +223,7 @@ scrape_config:
      - 远程环境：2-3秒
    - 最大重试次数 (max_retries)：
      - 默认值：2次
-     - 本地环境：1次
+     - 本���环境：1次
      - 远程环境：2-3次
    - 说明：采集失败时的重试策略
    - 建议：网络不稳定时适当增加重试间隔，避免频繁重试
@@ -158,7 +277,7 @@ scrape_config:
    - 网络不稳定时建议只采集关键指标
 
 4. **资源占用**
-   - 合理设置采集间隔，远程环境建议 30s 以上
+   - 合理设置采集间隔，远���环境建议 30s 以上
    - 避免过多的重试次数，默认 2 次通常足够
    - 及时清理断开的连接
    - 使用 pipeline 减少网络往返
@@ -168,10 +287,6 @@ scrape_config:
    - 考虑使用内网连接
    - 避免跨地域采集
    - 必要时可以部署多个 exporter 就近采集
-
-## 许可证
-
-MIT License 
 
 ## Prometheus 配置
 
@@ -207,3 +322,7 @@ scrape_configs:
 ```
 
 完整的 Kubernetes 部署配置请参考 [k8s-deploy.yaml](k8s-deploy.yaml)。
+
+## 许可证
+
+MIT License 

@@ -15,189 +15,195 @@
 
 ## 快速开始
 
-### 使用 Docker
+### 命令行参数
 
-1. 使用默认配置运行（不监控任何 Redis 实例）：
 ```bash
-docker run -p 9121:9121 redis-exporter
+Usage of redis_exporter:
+  -web.listen-address string
+        监听地址和端口 (默认 ":9121")
+  -config.file string
+        配置文件路径 (默认 "config.yaml")
+  -scrape.interval duration
+        指标采集间隔 (默认 30s)
 ```
 
-2. 使用自定义配置运行：
-```bash
-# 创建配置文件 config.yaml
-redis_instances:
-  # 带密码的 Redis 实例
-  - addr: "redis1:6379"
-    password: "password1"
-  
-  # 无密码的 Redis 实例
-  - addr: "redis2:6379"
+### 配置文件说明
 
-# 运行容器
-docker run -p 9121:9121 -v $(pwd)/config.yaml:/etc/redis-exporter/config.yaml redis-exporter
-```
+配置文件使用 YAML 格式，支持以下配置项：
 
-3. 使用环境变量指定配置文件路径：
-```bash
-docker run -p 9121:9121 \
-  -v $(pwd)/my-config.yaml:/config/redis.yaml \
-  -e CONFIG_FILE=/config/redis.yaml \
-  redis-exporter
-```
-
-### 配置说明
-
-配置文件使用 YAML 格式，支持以下几种情况：
-
-1. 不提供配置文件：使用内置的空配置
-2. 空配置文件：
-```yaml
-redis_instances: []
-```
-
-3. 标准配置：
+1. Redis 实例配置（必需）：
 ```yaml
 redis_instances:
-  # 带密码的实例
   - addr: "redis1:6379"      # Redis 实例地址
     password: "password1"     # Redis 密码（可选）
-  
-  # 无密码的实例
   - addr: "redis2:6379"      # 无密码时省略 password 字段
 ```
 
-## API 接口
-
-### 指标接口
-- `/metrics`: Prometheus 指标接口，包含所有 Redis 实例的监控指标
-
-### 健康检查接口
-- `/health`: 健康检查接口
-  - 返回 200: 表示 exporter 服务正常运行
-  - 用于监控 exporter 服务本身的状态
-
-### Kubernetes 探针
-- `/livez`: 存活探针
-  - 返回 200: 表示 exporter 服务正常运行
-  - 用于检查 exporter 服务进程状态
-- `/readyz`: 就绪探针
-  - 返回 200: 所有 Redis 实例可连接
-  - 返回 503: 存在不可连接的 Redis 实例
-  - 用于检查 exporter 是否可以正常采集指标
-
-## Kubernetes 部署示例
-
+2. 采集配置（可选，均有默认值）：
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis-exporter
-spec:
-  selector:
-    matchLabels:
-      app: redis-exporter
-  template:
-    metadata:
-      labels:
-        app: redis-exporter
-    spec:
-      containers:
-      - name: redis-exporter
-        image: redis-exporter:latest
-        ports:
-        - containerPort: 9121
-        livenessProbe:
-          httpGet:
-            path: /livez
-            port: 9121
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 9121
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        volumeMounts:
-        - name: config
-          mountPath: /etc/redis-exporter/config.yaml
-          subPath: config.yaml
-      volumes:
-      - name: config
-        configMap:
-          name: redis-exporter-config
+scrape_config:
+  # 超时设置
+  timeout: 5s              # 指标采集超时，默认 3s
+  health_check_timeout: 2s # 健康检查超时，默认 2s
+  retry_interval: 1s       # 重试间隔，默认 1s
+  max_retries: 2          # 最大重试次数，默认 3
+  
+  # 采集开关（默认全部为 true）
+  collect_memory: true     # 是否采集内存指标
+  collect_commands: true   # 是否采集命令统计
+  collect_keys: true       # 是否采集键统计
+  collect_clients: true    # 是否采集客户端连接数
+  
+  # 其他设置
+  pipeline: true          # 是否使用管道，默认 true
+  max_keys_sample: 1000   # 键采样数量限制，默认 1000
 ```
 
-## 可用指标
-
-### 基础指标
-- `redis_up`: Redis 实例的可用性 (0 表示不可用，1 表示可用)
-
-### 连接指标
-- `redis_connected_clients`: 当前连接的客户端数量
-
-### 内存指标
-- `redis_memory_used_bytes`: Redis 已使用的内存字节数
-- `redis_memory_max_bytes`: Redis 最大可用内存字节数
-- `redis_memory_fragmentation_ratio`: 内存碎片率
-
-### 键值指标
-- `redis_keys_total`: 每个数据库的键总数
-- `redis_expired_keys_total`: 过期的键总数
-- `redis_evicted_keys_total`: 由于内存限制被驱逐的键总数
-
-### 性能指标
-- `redis_commands_processed_total`: 处理的命令总数
-- `redis_keyspace_hits_total`: 键查找命中次数
-- `redis_keyspace_misses_total`: 键查找未命中次数
-
-### 持久化指标
-- `redis_last_save_time_seconds`: 最后一次 RDB 保存的时间戳
-- `redis_last_save_changes_total`: 自上次 RDB 保存以来的更改数
-
-## Prometheus 配置示例
-
+最简配置示例：
 ```yaml
-scrape_configs:
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['localhost:9121']
+redis_instances:
+  - addr: "redis:6379"
 ```
 
-## Grafana 面板示例
+推荐配置示例：
+```yaml
+redis_instances:
+  - addr: "redis1:6379"
+    password: "password1"
+  - addr: "redis2:6379"
 
-### 内存使用率
-```
-redis_memory_used_bytes / redis_memory_max_bytes * 100
-```
-
-### 键命中率
-```
-rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m])) * 100
-```
-
-### 秒命令数
-```
-rate(redis_commands_processed_total[1m])
+scrape_config:
+  timeout: 5s              # 采集超时设置为 5s
+  health_check_timeout: 2s # 健康检查超时设置为 2s
+  retry_interval: 1s       # 重试间隔设置为 1s
+  max_retries: 2          # 最大重试次数设置为 2次
 ```
 
-## 构建
+### 超时配置说明
 
-```bash
-# 构建二进制
-go build -o redis-exporter
+1. **指标采集超时 (timeout)**
+   - 默认值：8秒
+   - 推荐值：
+     - 本地环境：3-5秒
+     - 远程环境：8-10秒
+   - 说明：单个 Redis 实例的指标采集超时时间
+   - 建议：根据网络状况和 Redis 实例的响应时间适当调整
 
-# 构建 Docker 镜像
-docker build -t redis-exporter .
+2. **健康检查超时 (health_check_timeout)**
+   - 默认值：3秒
+   - 推荐值：
+     - 本地环境：1-2秒
+     - 远程环境：3-5秒
+   - 说明：健康检查和就绪检查的超时时间
+   - 建议：保持较短以快速响应健康状态变化，但要考虑网络延迟
 
-# 构建多架构镜像
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t shaoyun/redis-exporter:1.0 \
-  -t shaoyun/redis-exporter:latest \
-  --push .
-```
+3. **重试设置**
+   - 重试间隔 (retry_interval)：
+     - 默认值：2秒
+     - 本地环境：1秒
+     - 远程环境：2-3秒
+   - 最大重试次数 (max_retries)：
+     - 默认值：2次
+     - 本地环境：1次
+     - 远程环境：2-3次
+   - 说明：采集失败时的重试策略
+   - 建议：网络不稳定时适当增加重试间隔，避免频繁重试
+
+### 超时优化建议
+
+1. **本地开发环境**
+   ```yaml
+   scrape_config:
+     timeout: 3s
+     health_check_timeout: 1s
+     retry_interval: 1s
+     max_retries: 1
+   ```
+
+2. **远程生产环境（默认配置）**
+   ```yaml
+   scrape_config:
+     timeout: 8s
+     health_check_timeout: 3s
+     retry_interval: 2s
+     max_retries: 2
+   ```
+
+3. **网络极不稳定环境**
+   ```yaml
+   scrape_config:
+     timeout: 10s
+     health_check_timeout: 5s
+     retry_interval: 3s
+     max_retries: 3
+   ```
+
+## 性能优化建议
+
+1. **采集间隔**
+   - 本地环境：15-30秒
+   - 远程环境：30-60秒
+   - 网络不稳定：60-120秒
+   - 通过 `-scrape.interval` 参数设置
+
+2. **超时设置**
+   - 本地环境：timeout=3s, health_check_timeout=1s
+   - 远程环境：timeout=8s, health_check_timeout=3s（默认值）
+   - 不稳定环境：适当增加超时时间和重试次数
+
+3. **指标选择**
+   - 只采集必要的指标
+   - 高负载实例建议关闭 collect_commands
+   - 大规模集群建议关闭 collect_keys
+   - 网络不稳定时建议只采集关键指标
+
+4. **资源占用**
+   - 合理设置采集间隔，远程环境建议 30s 以上
+   - 避免过多的重试次数，默认 2 次通常足够
+   - 及时清理断开的连接
+   - 使用 pipeline 减少网络往返
+
+5. **网络优化**
+   - 确保 exporter 和 Redis 实例在同一网络区域
+   - 考虑使用内网连接
+   - 避免跨地域采集
+   - 必要时可以部署多个 exporter 就近采集
 
 ## 许可证
 
 MIT License 
+
+## Prometheus 配置
+
+### 静态配置
+```yaml
+scrape_configs:
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [addr]
+        target_label: redis_instance
+```
+
+### Kubernetes 服务发现
+```yaml
+scrape_configs:
+  - job_name: 'redis'
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_app]
+        regex: redis-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_service_name,__meta_kubernetes_namespace]
+        action: replace
+        target_label: instance
+        regex: (.+);(.+)
+        replacement: $1.$2.svc
+```
+
+完整的 Kubernetes 部署配置请参考 [k8s-deploy.yaml](k8s-deploy.yaml)。

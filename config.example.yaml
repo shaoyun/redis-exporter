@@ -1,15 +1,22 @@
 redis_instances:
-  # 示例 1：本地 Redis 实例（无密码）
-  - addr: "localhost:6379"
-    # 无密码时可以省略 password 字段
+  - addr: "redis1:6379"
+    password: "password1"
+  - addr: "redis2:6379"
 
-  # 示例 2：带密码的远程 Redis 实例
-  - addr: "redis.example.com:6379"
-    password: "your_password_here"
-
-  # 示例 3：Docker 环境中的 Redis 实例（无密码）
-  - addr: "redis:6379"
-
-  # 示例 4：Docker 环境中的带密码 Redis 实例
-  - addr: "secured-redis:6379"
-    password: "docker_redis_password"
+# 远程环境推荐配置（默认值）
+scrape_config:
+  # 超时设置
+  timeout: 8s              # 指标采集超时
+  health_check_timeout: 3s # 健康检查超时
+  retry_interval: 2s       # 重试间隔
+  max_retries: 2          # 最大重试次数
+  
+  # 采集开关
+  collect_memory: true     # 采集内存指标
+  collect_commands: true   # 采集命令统计
+  collect_keys: true       # 采集键统计
+  collect_clients: true    # 采集客户端连接数
+  
+  # 其他设置
+  pipeline: true          # 使用管道以减少网络往返
+  max_keys_sample: 1000   # 键采样数量限制

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  labels:
+    app: redis-exporter
+spec:
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+    spec:
+      containers:
+      - name: redis-exporter
+        image: redis-exporter:latest
+        ports:
+        - containerPort: 9121
+        volumeMounts:
+        - name: config
+          mountPath: /etc/redis-exporter/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: config
+        configMap:
+          name: redis-exporter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  labels:
+    app: redis-exporter
+spec:
+  ports:
+  - port: 9121
+    targetPort: 9121
+    name: metrics
+  selector:
+    app: redis-exporter
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-exporter-config
+data:
+  config.yaml: |
+    redis_instances:
+      - addr: "redis-1:6379"
+        password: "password1"
+      - addr: "redis-2:6379"
+        password: "password2"
+    scrape_config:
+      timeout: 8s
+      health_check_timeout: 3s
+      retry_interval: 2s
+      max_retries: 2 

@@ -1,0 +1,15 @@
+scrape_configs:
+  - job_name: 'redis'
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      # 只选择带有特定标签的服务
+      - source_labels: [__meta_kubernetes_service_label_app]
+        regex: redis-exporter
+        action: keep
+      # 设置目标地址
+      - source_labels: [__meta_kubernetes_service_name,__meta_kubernetes_namespace]
+        action: replace
+        target_label: instance
+        regex: (.+);(.+)
+        replacement: $1.$2.svc

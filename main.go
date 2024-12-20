@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,8 +18,9 @@ import (
 )
 
 var (
-	listenAddress = flag.String("web.listen-address", ":9121", "Address to listen on for web interface and telemetry")
-	configFile    = flag.String("config.file", "config.yaml", "Path to configuration file")
+	listenAddress  = flag.String("web.listen-address", ":9121", "Address to listen on for web interface and telemetry")
+	configFile     = flag.String("config.file", "config.yaml", "Path to configuration file")
+	scrapeInterval = flag.Duration("scrape.interval", 30*time.Second, "Interval between metric collection")
 )
 
 type RedisInstance struct {
@@ -30,11 +30,26 @@ type RedisInstance struct {
 
 type Config struct {
 	RedisInstances []RedisInstance `yaml:"redis_instances"`
+	ScrapeConfig   ScrapeConfig    `yaml:"scrape_config"`
+}
+
+type ScrapeConfig struct {
+	Timeout            *time.Duration `yaml:"timeout,omitempty"`
+	Pipeline           *bool          `yaml:"pipeline,omitempty"`
+	MaxKeys            *int           `yaml:"max_keys_sample,omitempty"`
+	CollectMemory      *bool          `yaml:"collect_memory,omitempty"`
+	CollectCommands    *bool          `yaml:"collect_commands,omitempty"`
+	CollectKeys        *bool          `yaml:"collect_keys,omitempty"`
+	CollectClients     *bool          `yaml:"collect_clients,omitempty"`
+	MaxRetries         *int           `yaml:"max_retries,omitempty"`
+	RetryInterval      *time.Duration `yaml:"retry_interval,omitempty"`
+	HealthCheckTimeout *time.Duration `yaml:"health_check_timeout,omitempty"`
 }
 
 type RedisExporter struct {
 	mutex   sync.Mutex
 	clients map[string]*redis.Client
+	config  *Config
 
 	// 基础指标
 	up *prometheus.GaugeVec
@@ -60,6 +75,10 @@ type RedisExporter struct {
 	// 持久化指标
 	lastSaveTime    *prometheus.GaugeVec
 	lastSaveChanges *prometheus.GaugeVec
+
+	lastCheck       time.Time
+	lastCheckResult bool
+	checkInterval   time.Duration
 }
 
 func loadConfig(filename string) (*Config, error) {
@@ -90,6 +109,7 @@ func NewRedisExporter(config *Config) (*RedisExporter, *prometheus.Registry) {
 
 	exporter := &RedisExporter{
 		clients: make(map[string]*redis.Client),
+		config:  config,
 
 		up: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
@@ -194,6 +214,8 @@ func NewRedisExporter(config *Config) (*RedisExporter, *prometheus.Registry) {
 			},
 			[]string{"addr"},
 		),
+
+		checkInterval: 5 * time.Second,
 	}
 
 	// 注册所有指标
@@ -232,45 +254,144 @@ func NewRedisExporter(config *Config) (*RedisExporter, *prometheus.Registry) {
 	return exporter, registry
 }
 
+func parseFloatOrZero(s string) float64 {
+	if val, err := strconv.ParseFloat(s, 64); err == nil {
+		return val
+	}
+	return 0
+}
+
+func (c *ScrapeConfig) getTimeout() time.Duration {
+	if c.Timeout == nil {
+		return 8 * time.Second
+	}
+	return *c.Timeout
+}
+
+func (c *ScrapeConfig) getPipeline() bool {
+	if c.Pipeline == nil {
+		return true
+	}
+	return *c.Pipeline
+}
+
+func (c *ScrapeConfig) getMaxKeys() int {
+	if c.MaxKeys == nil {
+		return 1000
+	}
+	return *c.MaxKeys
+}
+
+func (c *ScrapeConfig) getCollectMemory() bool {
+	if c.CollectMemory == nil {
+		return true
+	}
+	return *c.CollectMemory
+}
+
+func (c *ScrapeConfig) getCollectCommands() bool {
+	if c.CollectCommands == nil {
+		return true
+	}
+	return *c.CollectCommands
+}
+
+func (c *ScrapeConfig) getCollectKeys() bool {
+	if c.CollectKeys == nil {
+		return true
+	}
+	return *c.CollectKeys
+}
+
+func (c *ScrapeConfig) getCollectClients() bool {
+	if c.CollectClients == nil {
+		return true
+	}
+	return *c.CollectClients
+}
+
+func (c *ScrapeConfig) getMaxRetries() int {
+	if c.MaxRetries == nil {
+		return 2
+	}
+	return *c.MaxRetries
+}
+
+func (c *ScrapeConfig) getRetryInterval() time.Duration {
+	if c.RetryInterval == nil {
+		return 2 * time.Second
+	}
+	return *c.RetryInterval
+}
+
+func (c *ScrapeConfig) getHealthCheckTimeout() time.Duration {
+	if c.HealthCheckTimeout == nil {
+		return 3 * time.Second
+	}
+	return *c.HealthCheckTimeout
+}
+
 func (e *RedisExporter) collectMetrics() {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	// 为每个实例的采集设置独立的超时
 	for addr, client := range e.clients {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		// 检查连接状态
-		_, err := client.Ping(ctx).Result()
-		if err != nil {
-			log.Printf("Error pinging Redis at %s: %v", addr, err)
-			e.up.WithLabelValues(addr).Set(0)
-			continue
+		// 使用更短的上下文超时，避免单个实例阻塞太久
+		ctx, cancel := context.WithTimeout(context.Background(), e.config.ScrapeConfig.getTimeout())
+		retries := 0
+		for retries < e.config.ScrapeConfig.getMaxRetries() {
+			if err := e.collectInstanceMetrics(ctx, addr, client); err != nil {
+				retries++
+				time.Sleep(e.config.ScrapeConfig.getRetryInterval())
+				continue
+			}
+			break
 		}
-		e.up.WithLabelValues(addr).Set(1)
+		cancel() // 及时释放上下文
+	}
+}
 
-		// 获取 INFO 信息
-		info, err := client.Info(ctx).Result()
-		if err != nil {
-			log.Printf("Error getting Redis INFO at %s: %v", addr, err)
-			continue
-		}
+func (e *RedisExporter) collectInstanceMetrics(ctx context.Context, addr string, client *redis.Client) error {
+	pipe := client.Pipeline()
+	pingCmd := pipe.Ping(ctx)
+	infoCmd := pipe.Info(ctx)
 
-		// 解析 INFO 命令的输出
-		infoMap := parseRedisInfo(info)
+	// 执行 pipeline
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return err
+	}
 
-		// 更新连接指标
+	// 检查连接状态
+	_, err = pingCmd.Result()
+	if err != nil {
+		return err
+	}
+	e.up.WithLabelValues(addr).Set(1)
+
+	// 获取 INFO 信息
+	info, err := infoCmd.Result()
+	if err != nil {
+		return err
+	}
+
+	// 解析 INFO 命令的输出
+	infoMap := parseRedisInfo(info)
+
+	// 更新连接指标
+	if e.config.ScrapeConfig.getCollectClients() {
 		if v, ok := infoMap["connected_clients"]; ok {
 			if val, err := strconv.ParseFloat(v, 64); err == nil {
 				e.connectedClients.WithLabelValues(addr).Set(val)
 			}
 		}
+	}
 
-		// 更新内存指标
+	// 更新内存指标
+	if e.config.ScrapeConfig.getCollectMemory() {
 		if v, ok := infoMap["used_memory"]; ok {
-			if val, err := strconv.ParseFloat(v, 64); err == nil {
-				e.usedMemory.WithLabelValues(addr).Set(val)
-			}
+			e.usedMemory.WithLabelValues(addr).Set(parseFloatOrZero(v))
 		}
 		if v, ok := infoMap["maxmemory"]; ok {
 			if val, err := strconv.ParseFloat(v, 64); err == nil {
@@ -282,8 +403,10 @@ func (e *RedisExporter) collectMetrics() {
 				e.memoryFragRatio.WithLabelValues(addr).Set(val)
 			}
 		}
+	}
 
-		// 更新键值统计
+	// 更新键值统计
+	if e.config.ScrapeConfig.getCollectKeys() {
 		if v, ok := infoMap["expired_keys"]; ok {
 			if val, err := strconv.ParseFloat(v, 64); err == nil {
 				e.expiredKeys.WithLabelValues(addr).Set(val)
@@ -294,8 +417,10 @@ func (e *RedisExporter) collectMetrics() {
 				e.evictedKeys.WithLabelValues(addr).Set(val)
 			}
 		}
+	}
 
-		// 更新性能指标
+	// 更新性能指标
+	if e.config.ScrapeConfig.getCollectCommands() {
 		if v, ok := infoMap["total_commands_processed"]; ok {
 			if val, err := strconv.ParseFloat(v, 64); err == nil {
 				e.commandsProcessed.WithLabelValues(addr).Add(val)
@@ -311,36 +436,37 @@ func (e *RedisExporter) collectMetrics() {
 				e.keyspaceMisses.WithLabelValues(addr).Add(val)
 			}
 		}
+	}
 
-		// 更新持久化指标
-		if v, ok := infoMap["rdb_last_save_time"]; ok {
-			if val, err := strconv.ParseFloat(v, 64); err == nil {
-				e.lastSaveTime.WithLabelValues(addr).Set(val)
-			}
+	// 更新持久化指标
+	if v, ok := infoMap["rdb_last_save_time"]; ok {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			e.lastSaveTime.WithLabelValues(addr).Set(val)
 		}
-		if v, ok := infoMap["rdb_changes_since_last_save"]; ok {
-			if val, err := strconv.ParseFloat(v, 64); err == nil {
-				e.lastSaveChanges.WithLabelValues(addr).Set(val)
-			}
+	}
+	if v, ok := infoMap["rdb_changes_since_last_save"]; ok {
+		if val, err := strconv.ParseFloat(v, 64); err == nil {
+			e.lastSaveChanges.WithLabelValues(addr).Set(val)
 		}
+	}
 
-		// 获取每个数据库的键数量
-		for i := 0; i < 16; i++ {
-			dbName := fmt.Sprintf("db%d", i)
-			if v, ok := infoMap[dbName]; ok {
-				if strings.Contains(v, "keys=") {
-					parts := strings.Split(v, ",")
-					for _, part := range parts {
-						if strings.HasPrefix(part, "keys=") {
-							if val, err := strconv.ParseFloat(strings.TrimPrefix(part, "keys="), 64); err == nil {
-								e.totalKeys.WithLabelValues(addr, dbName).Set(val)
-							}
+	// 只扫描 INFO keyspace 中实际存在的数据库
+	for k, v := range infoMap {
+		if strings.HasPrefix(k, "db") {
+			if strings.Contains(v, "keys=") {
+				parts := strings.Split(v, ",")
+				for _, part := range parts {
+					if strings.HasPrefix(part, "keys=") {
+						if val, err := strconv.ParseFloat(strings.TrimPrefix(part, "keys="), 64); err == nil {
+							e.totalKeys.WithLabelValues(addr, k).Set(val)
 						}
 					}
 				}
 			}
 		}
 	}
+
+	return nil
 }
 
 // 解析 Redis INFO 命令的输出
@@ -366,17 +492,25 @@ func (e *RedisExporter) checkRedisStatus() bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	for addr, client := range e.clients {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if time.Since(e.lastCheck) < e.checkInterval {
+		return e.lastCheckResult
+	}
+
+	result := true
+	for _, client := range e.clients {
+		ctx, cancel := context.WithTimeout(context.Background(), e.config.ScrapeConfig.getHealthCheckTimeout())
 		_, err := client.Ping(ctx).Result()
 		cancel()
 
 		if err != nil {
-			log.Printf("Redis check failed for Redis at %s: %v", addr, err)
-			return false
+			result = false
+			break
 		}
 	}
-	return true
+
+	e.lastCheck = time.Now()
+	e.lastCheckResult = result
+	return result
 }
 
 func main() {
@@ -400,7 +534,7 @@ func main() {
 	go func() {
 		for {
 			exporter.collectMetrics()
-			time.Sleep(10 * time.Second)
+			time.Sleep(*scrapeInterval)
 		}
 	}()
 
@@ -445,6 +579,16 @@ func main() {
 			</html>`))
 	})
 
+	// 添加 HTTP 服务器超时设置
+	server := &http.Server{
+		Addr:              *listenAddress,
+		Handler:           nil, // 使用默认的 DefaultServeMux
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("Starting Redis exporter on %s", *listenAddress)
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+	log.Fatal(server.ListenAndServe())
 }

@@ -1,8 +1,24 @@
-# 默认空配置文件
-# 如果需要监控 Redis 实例，请按照以下格式添加配置：
-#
-# redis_instances:
-#   - addr: "redis:6379"
-#     password: "optional_password"
-#
-redis_instances: [] 
+# Redis 实例配置
+# 注意: 生产环境请修改以下配置
+redis_instances:
+  - addr: "localhost:6379"    # 默认连接本地 Redis
+    # password: "your_password_here"  # 如果需要密码，取消此行注释并修改
+
+# 采集配置（所有配置项都是可选的）
+scrape_config:
+  # 超时设置 - 默认值适用于大多数场景
+  timeout: 8s              # 指标采集超时
+  health_check_timeout: 3s # 健康检查超时
+  retry_interval: 2s       # 重试间隔
+  max_retries: 2          # 最大重试次数
+
+  # 采集开关 - 默认采集所有指标
+  # 如果需要降低 Redis 负载，可以关闭部分指标采集
+  #collect_memory: true    # 内存指标（建议保持开启）
+  #collect_commands: true  # 命令统计（高负载时可关闭）
+  #collect_keys: true      # 键统计（大规模实例可关闭）
+  #collect_clients: true   # 客户端连接数（建议保持开启）
+
+  # 性能优化设置
+  #pipeline: true         # 使用管道以减少网络往返
+  #max_keys_sample: 1000  # 键采样数量限制

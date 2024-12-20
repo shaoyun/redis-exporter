@@ -1,0 +1,15 @@
+redis_instances:
+  # 示例 1：本地 Redis 实例（无密码）
+  - addr: "localhost:6379"
+    # 无密码时可以省略 password 字段
+
+  # 示例 2：带密码的远程 Redis 实例
+  - addr: "redis.example.com:6379"
+    password: "your_password_here"
+
+  # 示例 3：Docker 环境中的 Redis 实例（无密码）
+  - addr: "redis:6379"
+
+  # 示例 4：Docker 环境中的带密码 Redis 实例
+  - addr: "secured-redis:6379"
+    password: "docker_redis_password"

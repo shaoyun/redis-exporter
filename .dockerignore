@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+.github
+
+# 配置文件
+config.yaml
+!config.example.yaml
+!config.default.yaml
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# 临时文件
+*.log
+*.tmp
+tmp/
+
+# 二进制文件
+redis-exporter
+redis_exporter
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试文件
+*_test.go
+*.test
+
+# 其他
+.DS_Store
+Thumbs.db
+*.md
+!README.md
+
+# 开发和调试文件
+debug
+debug.test
+__debug_bin
+coverage.out
+*.prof
+*.trace
+
+# 依赖目录
+vendor/ 

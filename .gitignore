@@ -1,0 +1,26 @@
+# 配置文件
+config.yaml
+
+# 二进制文件
+redis-exporter
+redis_exporter
+
+# Go 相关
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统相关
+.DS_Store
+Thumbs.db 

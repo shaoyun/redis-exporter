@@ -1,0 +1,8 @@
+# 默认空配置文件
+# 如果需要监控 Redis 实例，请按照以下格式添加配置：
+#
+# redis_instances:
+#   - addr: "redis:6379"
+#     password: "optional_password"
+#
+redis_instances: [] 
